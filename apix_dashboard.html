@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Airfare Price Index (APIx) — Prototype Dashboard</title>
+<style>
+  :root {
+    --ink: #1B2A41;
+    --paper: #FCFCFA;
+    --gold: #B08D2B;
+    --brick: #A64B3D;
+    --teal: #3F7566;
+    --slate: #6B7A8F;
+    --hairline: #DCD9D0;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: Georgia, 'Iowan Old Style', serif;
+    margin: 0;
+    padding: 28px 24px 20px;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; }
+  .masthead {
+    border-bottom: 2px solid var(--ink);
+    padding-bottom: 12px;
+    margin-bottom: 20px;
+  }
+  .masthead .title { font-size: 22px; font-weight: 700; }
+  .masthead .subtitle {
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 12.5px; color: var(--slate); margin-top: 3px;
+  }
+  .hero { display: flex; align-items: baseline; gap: 14px; margin-bottom: 6px; }
+  .hero .num { font-size: 52px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+  .hero .change { font-family: system-ui, sans-serif; font-size: 15px; font-weight: 600; }
+  .asof { font-family: system-ui, sans-serif; font-size: 12.5px; color: var(--slate); margin-bottom: 22px; }
+  .toggle { display: flex; gap: 6px; margin-bottom: 10px; font-family: system-ui, sans-serif; }
+  .toggle button {
+    padding: 5px 12px; font-size: 13px; cursor: pointer;
+    background: transparent; color: var(--ink);
+    border: 1px solid var(--ink); border-radius: 0;
+  }
+  .toggle button.active { background: var(--ink); color: var(--paper); }
+  .chart-box { width: 100%; height: 220px; margin-bottom: 26px; }
+  .cols { display: flex; gap: 24px; flex-wrap: wrap; }
+  .col { flex: 1 1 260px; }
+  .section-label { font-family: system-ui, sans-serif; font-size: 12.5px; font-weight: 600; }
+  .heatgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 10px; }
+  .heatcell { padding: 10px 12px; border: 1px solid var(--hairline); }
+  .heatcell .route { font-family: system-ui, sans-serif; font-size: 11px; opacity: 0.75; }
+  .heatcell .val { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .bars { display: flex; align-items: flex-end; gap: 10px; height: 160px; margin-top: 10px; border-bottom: 1px solid var(--hairline); padding-bottom: 4px; }
+  .bar-item { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
+  .bar-item .bar { width: 100%; }
+  .bar-item .lbl { font-family: system-ui, sans-serif; font-size: 10.5px; color: var(--slate); margin-top: 4px; }
+  .bar-item .fare-lbl { font-family: system-ui, sans-serif; font-size: 10px; color: var(--ink); margin-bottom: 3px; font-variant-numeric: tabular-nums; }
+  .footer {
+    border-top: 1px solid var(--hairline); margin-top: 26px; padding-top: 10px;
+    font-family: system-ui, sans-serif; font-size: 11px; color: var(--slate); line-height: 1.5;
+  }
+  svg text { font-family: system-ui, sans-serif; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="masthead">
+    <div class="title">Airfare Price Index</div>
+    <div class="subtitle">Prototype augmentation to the Consumer Price Index — simulated data, internal-round demo</div>
+  </div>
+
+  <div class="hero">
+    <div class="num" id="heroNum">113.4</div>
+    <div class="change" id="heroChange" style="color: var(--brick);">▲ 13.4 vs base period</div>
+  </div>
+  <div class="asof" id="asOf">Loading…</div>
+
+  <div class="toggle" id="toggle">
+    <button class="active" data-freq="Daily">Daily</button>
+    <button data-freq="Weekly">Weekly</button>
+    <button data-freq="Monthly">Monthly</button>
+  </div>
+
+  <div class="chart-box"><svg id="trendChart" width="100%" height="220" viewBox="0 0 700 220"></svg></div>
+
+  <div class="cols">
+    <div class="col">
+      <div class="section-label">Route-wise sub-index (7-day avg)</div>
+      <div class="heatgrid" id="heatgrid"></div>
+    </div>
+    <div class="col">
+      <div class="section-label">Lead-time elasticity (avg fare)</div>
+      <div class="bars" id="bars"></div>
+    </div>
+  </div>
+
+  <div class="footer">
+    Method: weighted price relative across a 6-route basket (Laspeyres-style), base period = first 7 days = 100.
+    Weights are illustrative — to be replaced with DGCA passenger-traffic shares.
+  </div>
+
+</div>
+
+<script>
+const INK="#1B2A41", GOLD="#B08D2B", BRICK="#A64B3D", TEAL="#3F7566", SLATE="#6B7A8F", HAIRLINE="#DCD9D0", PAPERBG="#EDEAE0";
+
+let FREQ = { Daily: [], Weekly: [], Monthly: [] };
+let HEATMAP = [];
+let ELASTICITY = [];
+
+function shortDate(iso) {
+  const dt = new Date(iso);
+  return dt.toLocaleDateString('en-US', { month: 'short', day: '2-digit' });
+}
+function shortMonth(iso) {
+  const dt = new Date(iso);
+  return dt.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+}
+
+async function loadData() {
+  const [daily, weekly, monthly, heatmap, elasticity] = await Promise.all([
+    fetch('data/daily.json').then(r => r.json()),
+    fetch('data/weekly.json').then(r => r.json()),
+    fetch('data/monthly.json').then(r => r.json()),
+    fetch('data/heatmap.json').then(r => r.json()),
+    fetch('data/elasticity.json').then(r => r.json()),
+  ]);
+
+  FREQ.Daily = daily.map(row => ({ d: shortDate(row.scrape_date), v: row.APIx }));
+  FREQ.Weekly = weekly.map(row => ({ d: shortDate(row.scrape_date), v: row.APIx_weekly }));
+  FREQ.Monthly = monthly.map(row => ({ d: shortMonth(row.scrape_date), v: row.APIx_monthly }));
+  HEATMAP = heatmap;
+  ELASTICITY = elasticity;
+
+  const latest = FREQ.Daily[FREQ.Daily.length - 1].v;
+  const latestDate = daily[daily.length - 1].scrape_date;
+  const change = latest - 100;
+  const rising = change >= 0;
+  document.getElementById('heroNum').textContent = latest.toFixed(1);
+  document.getElementById('asOf').textContent =
+    `As of ${new Date(latestDate).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})} · base period (first 7 days) = 100`;
+  const changeEl = document.getElementById('heroChange');
+  changeEl.textContent = `${rising ? '▲' : '▼'} ${Math.abs(change).toFixed(1)} vs base period`;
+  changeEl.style.color = rising ? BRICK : TEAL;
+
+  drawChart('Daily');
+  drawHeatmap();
+  drawBars();
+}
+
+function mix(hexA, hexB, t){
+  const a = hexA.match(/\w\w/g).map(h=>parseInt(h,16));
+  const b = hexB.match(/\w\w/g).map(h=>parseInt(h,16));
+  const c = a.map((v,i)=>Math.round(v+(b[i]-v)*t));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+function heatColor(v){
+  const clamped = Math.max(96, Math.min(104, v));
+  if (clamped <= 100) return mix(TEAL, PAPERBG, (clamped-96)/4);
+  return mix(PAPERBG, BRICK, (clamped-100)/4);
+}
+
+function drawChart(freq){
+  const data = FREQ[freq];
+  const svg = document.getElementById('trendChart');
+  svg.innerHTML = '';
+  const W=700,H=220, padL=40,padR=10,padT=10,padB=30;
+  const plotW = W-padL-padR, plotH = H-padT-padB;
+  const minV=85, maxV=120;
+  const yFor = v => padT + plotH*(1-(v-minV)/(maxV-minV));
+  const xFor = i => padL + plotW*(i/(data.length-1));
+
+  // gridlines + y labels
+  [90,100,110,120].forEach(v=>{
+    const y = yFor(v);
+    const line = document.createElementNS('http://www.w3.org/2000/svg','line');
+    line.setAttribute('x1',padL); line.setAttribute('x2',W-padR);
+    line.setAttribute('y1',y); line.setAttribute('y2',y);
+    line.setAttribute('stroke', v===100? SLATE : HAIRLINE);
+    line.setAttribute('stroke-dasharray', v===100? '3,3' : '0');
+    svg.appendChild(line);
+    const label = document.createElementNS('http://www.w3.org/2000/svg','text');
+    label.setAttribute('x', padL-6); label.setAttribute('y', y+3);
+    label.setAttribute('text-anchor','end'); label.setAttribute('font-size','10.5');
+    label.setAttribute('fill', SLATE); label.textContent = v;
+    svg.appendChild(label);
+  });
+
+  // x labels (sparse for daily)
+  const step = freq === 'Daily' ? 7 : 1;
+  data.forEach((pt,i)=>{
+    if (i % step === 0 || i === data.length-1){
+      const label = document.createElementNS('http://www.w3.org/2000/svg','text');
+      label.setAttribute('x', xFor(i)); label.setAttribute('y', H-8);
+      label.setAttribute('text-anchor','middle'); label.setAttribute('font-size','10');
+      label.setAttribute('fill', SLATE); label.textContent = pt.d;
+      svg.appendChild(label);
+    }
+  });
+
+  // line path
+  const points = data.map((pt,i)=>`${xFor(i)},${yFor(pt.v)}`).join(' ');
+  const polyline = document.createElementNS('http://www.w3.org/2000/svg','polyline');
+  polyline.setAttribute('points', points);
+  polyline.setAttribute('fill','none');
+  polyline.setAttribute('stroke', GOLD);
+  polyline.setAttribute('stroke-width','2');
+  svg.appendChild(polyline);
+}
+
+function drawHeatmap(){
+  const el = document.getElementById('heatgrid');
+  el.innerHTML = HEATMAP.map(h => `
+    <div class="heatcell" style="background:${heatColor(h.v)}">
+      <div class="route">${h.route}</div>
+      <div class="val">${h.v.toFixed(1)}</div>
+    </div>`).join('');
+}
+
+function drawBars(){
+  const el = document.getElementById('bars');
+  const max = Math.max(...ELASTICITY.map(e=>e.fare));
+  el.innerHTML = ELASTICITY.map(e => {
+    const pct = (e.fare/max*100).toFixed(0);
+    const color = e.fare === max ? BRICK : GOLD;
+    return `<div class="bar-item">
+      <div class="fare-lbl">₹${e.fare.toLocaleString('en-IN')}</div>
+      <div class="bar" style="height:${pct}%; background:${color};"></div>
+      <div class="lbl">${e.window}</div>
+    </div>`;
+  }).join('');
+}
+
+document.getElementById('toggle').addEventListener('click', (e) => {
+  if (e.target.tagName !== 'BUTTON') return;
+  document.querySelectorAll('#toggle button').forEach(b=>b.classList.remove('active'));
+  e.target.classList.add('active');
+  drawChart(e.target.dataset.freq);
+});
+
+loadData().catch(err => {
+  document.querySelector('.wrap').innerHTML =
+    '<p style="font-family:system-ui,sans-serif;color:#A64B3D;padding:40px;">' +
+    'Could not load data. Make sure the data/ folder (with daily.json, weekly.json, etc.) ' +
+    'is sitting next to this HTML file. Run export_static_data.py after main.py to generate it.' +
+    '<br><br>Error: ' + err + '</p>';
+});
+</script>
+</body>
+</html>
